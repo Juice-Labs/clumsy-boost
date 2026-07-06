@@ -32,8 +32,11 @@ Ihandle *filterSelectList;
 static Ihandle *stateIcon;
 static Ihandle *timer;
 static Ihandle *timeout = NULL;
+// original dialog wndproc, chained to from preventMinimizeProc
+static WNDPROC originalWndProc = NULL;
 
 void showStatus(const char *line);
+static LRESULT CALLBACK preventMinimizeProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static int uiOnDialogShow(Ihandle *ih, int state);
 static int uiStopCb(Ihandle *ih);
 static int uiStartCb(Ihandle *ih);
@@ -233,7 +236,7 @@ void init(int argc, char* argv[]) {
         )
     );
 
-    IupSetAttribute(dialog, "TITLE", "clumsy " CLUMSY_VERSION);
+    IupSetAttribute(dialog, "TITLE", "clumsy-boost v" CLUMSY_VERSION);
     IupSetAttribute(dialog, "SIZE", "480x"); // add padding manually to width
     IupSetAttribute(dialog, "RESIZE", "NO");
     IupSetCallback(dialog, "SHOW_CB", (Icallback)uiOnDialogShow);
@@ -319,6 +322,21 @@ static BOOL checkIsRunning() {
 }
 
 
+// blocks minimize (title bar button, system menu, Win+M, Show Desktop) and,
+// as a fallback for any path that minimizes without SC_MINIMIZE, restores
+// immediately. keeps the window in the foreground processing tier so the
+// lag timer doesn't get throttled during a benchmark run.
+static LRESULT CALLBACK preventMinimizeProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_SYSCOMMAND && (wParam & 0xFFF0) == SC_MINIMIZE) {
+        return 0;
+    }
+    if (msg == WM_SIZE && wParam == SIZE_MINIMIZED) {
+        ShowWindow(hWnd, SW_RESTORE);
+        return 0;
+    }
+    return CallWindowProc(originalWndProc, hWnd, msg, wParam, lParam);
+}
+
 static int uiOnDialogShow(Ihandle *ih, int state) {
     // only need to process on show
     HWND hWnd;
@@ -333,6 +351,14 @@ static int uiOnDialogShow(Ihandle *ih, int state) {
     icon = LoadIcon(hInstance, "CLUMSY_ICON");
     SendMessage(hWnd, WM_SETICON, ICON_BIG, (LPARAM)icon);
     SendMessage(hWnd, WM_SETICON, ICON_SMALL, (LPARAM)icon);
+
+    // keep window topmost so Windows doesn't deprioritize the process (and its
+    // lag timer resolution) when it's pushed to the background during a benchmark run
+    SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+    // block minimizing too, since a minimized window is background/inactive
+    // just like an unfocused one and would trigger the same timer throttling
+    originalWndProc = (WNDPROC)SetWindowLongPtr(hWnd, GWLP_WNDPROC, (LONG_PTR)preventMinimizeProc);
 
 #if PREVENT_MULTI_INSTANCE
     exit = checkIsRunning();

@@ -17,6 +17,13 @@ See [this page](http://jagt.github.io/clumsy) for more info and build instructio
 
 MIT
 
+## Third-Party Attribution
+
+This project links against and redistributes the following third-party components (see `external/`):
+
+* [WinDivert](http://reqrypt.org/windivert.html) — dual-licensed under the GNU Lesser General Public License v3 (LGPLv3) or GNU General Public License v2 (GPLv2), at your choice. See `external/WinDivert-2.1.0-A/LICENSE`. WinDivert is used unmodified as a separate, dynamically-linked driver/DLL (`WinDivert.dll` / `WinDivert64.sys`), not statically embedded into `clumsy.exe`.
+* [IUP - Portable User Interface](https://www.tecgraf.puc-rio.br/iup/) — MIT licensed, copyright Tecgraf/PUC-Rio. Used as a dynamically-linked GUI library (`iup.dll`).
+
 ## InTouchHealth Fork Notes
 
 ### Usage:
