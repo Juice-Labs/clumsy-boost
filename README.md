@@ -1,4 +1,6 @@
-# clumsy
+# clumsy-boost
+
+Juice Labs' fork of Clumsy, purpose-built for steady, repeatable latency injection during HP Z Boost QA benchmarking. See [Juice Labs Fork Notes](#juice-labs-fork-notes) below for what's different from upstream and why.
 
 __clumsy makes your network condition on Windows significantly worse, but in a managed and interactive manner.__
 
@@ -24,34 +26,42 @@ This project links against and redistributes the following third-party component
 * [WinDivert](http://reqrypt.org/windivert.html) — dual-licensed under the GNU Lesser General Public License v3 (LGPLv3) or GNU General Public License v2 (GPLv2), at your choice. See `external/WinDivert-2.1.0-A/LICENSE`. WinDivert is used unmodified as a separate, dynamically-linked driver/DLL (`WinDivert.dll` / `WinDivert64.sys`), not statically embedded into `clumsy.exe`.
 * [IUP - Portable User Interface](https://www.tecgraf.puc-rio.br/iup/) — MIT licensed, copyright Tecgraf/PUC-Rio. Used as a dynamically-linked GUI library (`iup.dll`).
 
-## InTouchHealth Fork Notes
+## Juice Labs Fork Notes
+
+### Why this fork exists:
+Clumsy is used to inject fixed latency (5/10/15/30ms) during automated HP Z Boost QA benchmark runs. Upstream Clumsy loses accurate lag timing whenever its window isn't focused or gets minimized — Windows throttles background processes' timer resolution, which corrupts the steady-state latency a benchmark capture depends on. This fork exists to keep that timing steady for the full duration of a run.
+
+### What's different from IntouchHealth/clumsy:
+* The window is forced topmost (`SetWindowPos`/`HWND_TOPMOST`) and can't be minimized (title bar button, system menu, Win+M, and Show Desktop are all blocked), so the process stays in the foreground processing tier regardless of focus.
+* Rebranded as clumsy-boost, starting at v1.0.0.
 
 ### Usage:
-* Download the latest ITH build from the releases page.
-* Extract the Zip file to a folder on your PC.
-* Run clumsy.exe. If you see any Windows Defender or AV warnings, bypass them to run the app.
+* Download the latest clumsy-boost build from the [releases page](https://github.com/Juice-Labs/clumsy-boost/releases).
+* Extract the zip file to a folder on your PC.
+* Run clumsy.exe as Administrator (required for WinDivert packet interception). If you see any Windows Defender or AV warnings, bypass them to run the app.
 
-### Newer Features:
-* You can now open multiple Clumsy instances.
-    * This was possible in earlier versions, then was lost, but now it's back.
-    * Note that we haven't carefully tested the behavior of overlapping filters, so use with care.
-* Bandwidth cap is now available.
+## Features
+
+* You can open multiple Clumsy instances.
+    * Note that overlapping filters haven't been carefully tested, so use with care.
+* Bandwidth cap is available.
     * The cap is shared across up and down traffic, so it's recommended to use a second Clumsy instance for fully independent up vs. down control.
     * This feature is still somewhat experimental, and may not be 100% stable.
 
-### Build instructions for Windows 10 with VS 2019:
+## Build Instructions (Windows 10/11, VS 2019)
+
 * Clone the repo.
-* Download the most recent 5.x.x Windows version of Premake from here: https://premake.github.io/download.html, and extract the EXE into your local clumsy repo folder.
-* From a command prompt in the clumsy repo folder, execute 'premake5 vs2010'. If you see any Windows Defender or AV warnings, bypass them to execute the command.
-* Open the 'clumsy/build/clumsy.sln' file in VS 2019, and accept the default recommendations for updating the Windows SDK Version and Platform Toolset.
+* Download Premake from here: https://premake.github.io/download/ — use [alpha16](https://github.com/premake/premake-core/releases/tag/v5.0.0-alpha16) (`premake-5.0.0-alpha16-windows.zip`), not the current beta release, since beta removed the legacy `configuration()` API this project's `premake5.lua` relies on. Extract `premake5.exe` into the repo root.
+* From a command prompt in the repo folder, execute `premake5 vs2019`. If you see any Windows Defender or AV warnings, bypass them to execute the command.
+* Open `build/clumsy.sln` in VS 2019, and accept the default recommendations for updating the Windows SDK Version and Platform Toolset.
 * You should now be able to build and debug the various configurations from VS 2019.
 * You may delete the premake5.exe file at this point if you'd like.
 
 ### Fork History:
-* Forked from "offical" jagt/clumsy into codyherzog/clumsy.
-* Pulled in changes from crunkyball/clumsy to get WinDivert library upgrade which is required for some of our advanced filters.
+* Forked from "official" jagt/clumsy into codyherzog/clumsy.
+* Pulled in changes from crunkyball/clumsy to get WinDivert library upgrade which is required for some advanced filters.
 * Pulled in changes from rorlork/clumsy to get improvements to bandwidth cap feature.
 * Modified the bandwidth cap code, because it had some bugs and wasn't optimal for ITH usage.
 * Made a few other tweaks, such as allowing multiple instances.
-* Forked from codyherzog/clumsy to IntouchHealth/clumsy, where ongoing ITH development can take place.
-* The "official" jagt/clumsy project seems to be dead. It hasn't been touched in many years. If it ever picks up again, we should try to get our changes into it.
+* Forked from codyherzog/clumsy to IntouchHealth/clumsy, where ongoing ITH development took place.
+* Forked from IntouchHealth/clumsy v0.4.2.ITH.Alpha.3 into Juice-Labs/clumsy-boost, to make Clumsy stable enough for unattended benchmark runs.
