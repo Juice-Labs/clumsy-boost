@@ -136,7 +136,7 @@ BOOL tryElevate(HWND hWnd, BOOL silent) {
                 {
                     // The user refused the elevation.
                     // alert and exit
-                    MessageBox(hWnd, (LPCSTR)"clumsy needs to be elevated to work. Run as Administrator or click Yes in promoted UAC dialog",
+                    MessageBox(hWnd, (LPCSTR)"clumsy-boost needs to be elevated to work. Run as Administrator or click Yes in promoted UAC dialog",
                         (LPCSTR)"Aborting", MB_OK);
                 }
             }
