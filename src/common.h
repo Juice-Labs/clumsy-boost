@@ -161,6 +161,10 @@ void showStatus(const char* line);
 // WinDivert
 int divertStart(const char * filter, char buf[]);
 void divertStop();
+void divertSetLogFile(const char *path); // enable run logging to path (NULL/"" disables)
+
+// lag module diagnostics accessor
+int lagQueueDepth(void);
 
 // utils
 // STR to convert int macro to string

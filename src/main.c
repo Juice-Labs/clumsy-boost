@@ -264,6 +264,13 @@ void init(int argc, char* argv[]) {
         IupSetCallback(timeout, "ACTION_CB", uiTimeoutCb);
         IupSetAttribute(timeout, "RUN", "YES");
     }
+
+    // optional run diagnostics log (--log-file <path>); enables per-second
+    // packet counters written to the file when filtering starts
+    arg_value = IupGetGlobal("log-file");
+    if (arg_value != NULL) {
+        divertSetLogFile(arg_value);
+    }
 }
 
 void startup() {

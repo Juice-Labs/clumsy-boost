@@ -34,6 +34,12 @@ static INLINE_FUNCTION short isBufEmpty() {
     return ret;
 }
 
+// read-only accessor for diagnostics/logging: current number of packets held
+// in the lag buffer. Plain int read; a torn value only affects a log snapshot.
+int lagQueueDepth(void) {
+    return bufSize;
+}
+
 static Ihandle *lagSetupUI() {
     Ihandle *lagControlsBox = IupHbox(
         inboundCheckbox = IupToggle("Inbound", NULL),

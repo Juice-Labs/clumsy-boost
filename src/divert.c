@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <memory.h>
+#include <string.h>
 #include <winsock2.h>
 #include <Ws2tcpip.h>
 #include "windivert.h"
@@ -24,6 +25,18 @@ static HANDLE clockTimer;
 static DWORD divertReadLoop(LPVOID arg);
 static DWORD divertClockLoop(LPVOID arg);
 static void clockSleep(DWORD ms);
+
+// --- optional run diagnostics -------------------------------------------------
+// When a log file path is set (via --log-file), a low-priority logger thread
+// appends per-second snapshots of packet counts so an unattended benchmark run
+// can be audited afterwards (esp. drops, which mean latency wasn't applied to
+// every packet). Counters are 32-bit LONG so plain reads are atomic on x86/x64;
+// increments use Interlocked. Zero overhead when logging is off.
+static char logFilePath[MSG_BUFSIZE] = {0};
+static FILE *logFile = NULL;
+static HANDLE logThread = NULL;
+static volatile LONG diagRecv = 0, diagSent = 0, diagDropped = 0;
+static DWORD diagLogLoop(LPVOID arg);
 
 // not to put these in common.h since modules shouldn't see these
 extern PacketNode * const head;
@@ -126,6 +139,11 @@ int divertStart(const char *filter, char buf[]) {
         LOG("Failed to create high resolution waitable timer (%lu), falling back to Sleep()", GetLastError());
     }
 
+    // reset diagnostics counters before any thread can touch them
+    diagRecv = diagSent = diagDropped = 0;
+    logFile = NULL;
+    logThread = NULL;
+
     loopThread = CreateThread(NULL, 1, (LPTHREAD_START_ROUTINE)divertReadLoop, NULL, 0, NULL);
     if (loopThread == NULL) {
         sprintf(buf, "Failed to create recv loop thread (%lu)", GetLastError());
@@ -137,9 +155,73 @@ int divertStart(const char *filter, char buf[]) {
         return FALSE;
     }
 
+    // start the run logger only if a log file was requested (--log-file)
+    if (logFilePath[0]) {
+        logFile = fopen(logFilePath, "w");
+        if (logFile) {
+            fprintf(logFile, "clumsy-boost run log\nfilter: %s\n", filter);
+            fflush(logFile);
+            logThread = CreateThread(NULL, 1, (LPTHREAD_START_ROUTINE)diagLogLoop, NULL, 0, NULL);
+            if (logThread == NULL) {
+                LOG("Failed to create logger thread (%lu)", GetLastError());
+                fclose(logFile);
+                logFile = NULL;
+            }
+        } else {
+            LOG("Failed to open log file '%s'", logFilePath);
+        }
+    }
+
     LOG("Threads created");
 
     return TRUE;
+}
+
+// Enable run logging for the next divertStart by setting a destination path.
+// Pass NULL or "" to disable. Safe to call before divertStart; the copy is
+// bounded to the fixed buffer.
+void divertSetLogFile(const char *path) {
+    if (path && path[0]) {
+        strncpy(logFilePath, path, MSG_BUFSIZE - 1);
+        logFilePath[MSG_BUFSIZE - 1] = '\0';
+    } else {
+        logFilePath[0] = '\0';
+    }
+}
+
+// Logger thread: appends a snapshot line every second until stopLooping, then a
+// final summary. Only reads atomic counters + lag queue depth and writes a file,
+// so it never perturbs the timing-critical read/clock loops.
+static DWORD diagLogLoop(LPVOID arg) {
+    DWORD startTick = GetTickCount();
+    LONG lastRecv = 0, lastSent = 0, lastDropped = 0;
+    UNREFERENCED_PARAMETER(arg);
+
+    while (!stopLooping) {
+        SYSTEMTIME st;
+        DWORD elapsedMs;
+        LONG recv, sent, dropped;
+        Sleep(1000);
+        recv = diagRecv; sent = diagSent; dropped = diagDropped;
+        elapsedMs = GetTickCount() - startTick;
+        GetLocalTime(&st);
+        if (logFile) {
+            fprintf(logFile,
+                "[%02d:%02d:%02d] t=%lus recv=%ld(+%ld/s) sent=%ld(+%ld/s) dropped=%ld(+%ld/s) queued=%d\n",
+                st.wHour, st.wMinute, st.wSecond, (unsigned long)(elapsedMs / 1000),
+                recv, recv - lastRecv, sent, sent - lastSent, dropped, dropped - lastDropped,
+                lagQueueDepth());
+            fflush(logFile);
+        }
+        lastRecv = recv; lastSent = sent; lastDropped = dropped;
+    }
+
+    if (logFile) {
+        fprintf(logFile, "[summary] total recv=%ld sent=%ld dropped=%ld\n",
+            diagRecv, diagSent, diagDropped);
+        fflush(logFile);
+    }
+    return 0;
 }
 
 static int sendAllListPackets() {
@@ -192,16 +274,20 @@ static int sendAllListPackets() {
                 resent = WinDivertSend(divertHandle, pnode->packet, pnode->packetLen, &sendLen, &(pnode->addr));
                 LOG("Resend failed inbound ICMP packets as outbound: %s", resent ? "SUCCESS" : "FAIL");
                 InterlockedExchange16(&sendState, SEND_STATUS_SEND);
+                InterlockedIncrement(&diagSent);
             } else {
                 InterlockedExchange16(&sendState, SEND_STATUS_FAIL);
+                InterlockedIncrement(&diagDropped);
             }
         } else {
             if (sendLen < pnode->packetLen) {
                 // TODO don't know how this can happen, or it needs to be resent like good old UDP packet
                 LOG("Internal Error: DivertSend truncated send packet.");
                 InterlockedExchange16(&sendState, SEND_STATUS_FAIL);
+                InterlockedIncrement(&diagDropped);
             } else {
                 InterlockedExchange16(&sendState, SEND_STATUS_SEND);
+                InterlockedIncrement(&diagSent);
             }
         }
 
@@ -371,10 +457,11 @@ static DWORD divertReadLoop(LPVOID arg) {
         }
         if (readLen > MAX_PACKETSIZE) {
             // don't know how this can happen
-            LOG("Internal Error: DivertRecv truncated recv packet."); 
+            LOG("Internal Error: DivertRecv truncated recv packet.");
         }
+        InterlockedIncrement(&diagRecv);
 
-        //dumpPacket(packetBuf, readLen, &addrBuf);  
+        //dumpPacket(packetBuf, readLen, &addrBuf);
 
         waitResult = WaitForSingleObject(mutex, INFINITE);
         switch(waitResult) {
@@ -420,6 +507,17 @@ void divertStop() {
     LOG("Stopping...");
     InterlockedIncrement16(&stopLooping);
     WaitForMultipleObjects(2, threads, TRUE, INFINITE);
+
+    // stop the logger (it polls stopLooping once a second) and finalize the file
+    if (logThread) {
+        WaitForSingleObject(logThread, INFINITE);
+        CloseHandle(logThread);
+        logThread = NULL;
+    }
+    if (logFile) {
+        fclose(logFile);
+        logFile = NULL;
+    }
 
     LOG("Successfully waited threads and stopped.");
 }
