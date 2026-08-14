@@ -1,6 +1,7 @@
 // lagging packets
 #include "iup.h"
 #include "common.h"
+#include "timing.h"
 #define NAME "lag"
 #define LAG_MIN "0"
 #define LAG_MAX "3000"
@@ -20,6 +21,10 @@ static volatile short lagEnabled = 0,
 static PacketNode lagHeadNode = {0}, lagTailNode = {0};
 static PacketNode *bufHead = &lagHeadNode, *bufTail = &lagTailNode;
 static int bufSize = 0;
+
+// QueryPerformanceCounter ticks/sec; queried once at startup. timeGetTime()'s
+// whole-millisecond resolution isn't precise enough for the release-timing check
+static LARGE_INTEGER lagQpcFrequency;
 
 static INLINE_FUNCTION short isBufEmpty() {
     short ret = bufHead->next == bufTail;
@@ -68,6 +73,7 @@ static void lagStartUp() {
     } else {
         assert(isBufEmpty());
     }
+    QueryPerformanceFrequency(&lagQpcFrequency);
     startTimePeriod();
 }
 
@@ -84,12 +90,18 @@ static void lagCloseDown(PacketNode *head, PacketNode *tail) {
 }
 
 static short lagProcess(PacketNode *head, PacketNode *tail) {
-    DWORD currentTime = timeGetTime();
+    LARGE_INTEGER currentTime;
+    LONGLONG lagTimeTicks;
     PacketNode *pac = tail->prev;
+    QueryPerformanceCounter(&currentTime);
+    // lagTime is in whole milliseconds, so unitsPerSecond = 1000
+    lagTimeTicks = lagValueToQpcTicks(lagTime, lagQpcFrequency.QuadPart, 1000);
     // pick up all packets and fill in the current time
     while (bufSize < KEEP_AT_MOST && pac != head) {
         if (checkDirection(pac->addr.Outbound, lagInbound, lagOutbound)) {
-            insertAfter(popNode(pac), bufHead)->timestamp = timeGetTime();
+            LARGE_INTEGER now;
+            QueryPerformanceCounter(&now);
+            insertAfter(popNode(pac), bufHead)->timestamp = now.QuadPart;
             ++bufSize;
             pac = tail->prev;
         } else {
@@ -100,7 +112,7 @@ static short lagProcess(PacketNode *head, PacketNode *tail) {
     // try sending overdue packets from buffer tail
     while (!isBufEmpty()) {
         pac = bufTail->prev;
-        if (currentTime > pac->timestamp + lagTime) {
+        if (lagIsDue(currentTime.QuadPart, pac->timestamp, lagTimeTicks)) {
             insertAfter(popNode(bufTail->prev), head); // sending queue is already empty by now
             --bufSize;
             LOG("Send lagged packets.");
