@@ -4,6 +4,7 @@
 #include <Ws2tcpip.h>
 #include "windivert.h"
 #include "common.h"
+#include "timing.h"
 #define DIVERT_PRIORITY 0
 #define MAX_PACKETSIZE 0xFFFF
 #define READ_TIME_PER_STEP 3
@@ -15,9 +16,14 @@
 static HANDLE divertHandle;
 static volatile short stopLooping;
 static HANDLE loopThread, clockThread, mutex;
+// high resolution waitable timer for the clock loop's cadence; Sleep() alone
+// can wake up noticeably later than requested even at 1ms timer resolution,
+// which adds jitter directly into lag release timing
+static HANDLE clockTimer;
 
 static DWORD divertReadLoop(LPVOID arg);
 static DWORD divertClockLoop(LPVOID arg);
+static void clockSleep(DWORD ms);
 
 // not to put these in common.h since modules shouldn't see these
 extern PacketNode * const head;
@@ -112,6 +118,12 @@ int divertStart(const char *filter, char buf[]) {
     if (mutex == NULL) {
         sprintf(buf, "Failed to create mutex (%lu)", GetLastError());
         return FALSE;
+    }
+
+    // not fatal if unavailable (pre-1803 Windows): clockSleep() falls back to Sleep()
+    clockTimer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    if (clockTimer == NULL) {
+        LOG("Failed to create high resolution waitable timer (%lu), falling back to Sleep()", GetLastError());
     }
 
     loopThread = CreateThread(NULL, 1, (LPTHREAD_START_ROUTINE)divertReadLoop, NULL, 0, NULL);
@@ -235,6 +247,22 @@ static void divertConsumeStep() {
 #endif
 }
 
+// waits for ms using the high resolution waitable timer created in divertStart,
+// for tighter/less jittery wake-up than a plain Sleep(); falls back to Sleep()
+// if the timer wasn't available or arming/waiting on it fails for any reason
+static void clockSleep(DWORD ms) {
+    LARGE_INTEGER dueTime;
+    if (clockTimer == NULL) {
+        Sleep(ms);
+        return;
+    }
+    dueTime.QuadPart = relativeDueTime100ns(ms); // 100ns units, negative = relative time
+    if (!SetWaitableTimer(clockTimer, &dueTime, 0, NULL, NULL, FALSE) ||
+            WaitForSingleObject(clockTimer, INFINITE) != WAIT_OBJECT_0) {
+        Sleep(ms);
+    }
+}
+
 // periodically try to consume packets to keep the network responsive and not blocked by recv
 static DWORD divertClockLoop(LPVOID arg) {
     DWORD startTick, stepTick, waitResult;
@@ -259,13 +287,13 @@ static DWORD divertClockLoop(LPVOID arg) {
                 // if didn't spent enough time, we sleep on it
                 stepTick = GetTickCount() - startTick;
                 if (stepTick < CLOCK_WAITMS) {
-                    Sleep(CLOCK_WAITMS - stepTick);
+                    clockSleep(CLOCK_WAITMS - stepTick);
                 }
                 break;
             case WAIT_TIMEOUT:
                 // read loop is processing, so we can skip this run
                 LOG("!!! Skipping one run");
-                Sleep(CLOCK_WAITMS);
+                clockSleep(CLOCK_WAITMS);
                 break;
             case WAIT_ABANDONED:
                 LOG("Acquired abandoned mutex");

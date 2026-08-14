@@ -47,12 +47,21 @@ static void test_lagIsDue_boundary(void) {
     CHECK(lagIsDue(ts,           ts, lag) == 0);   // just captured -> not due
 }
 
+static void test_relativeDueTime100ns(void) {
+    // SetWaitableTimer wants negative 100ns units for a relative wait.
+    CHECK(relativeDueTime100ns(1)    == -10000LL);     // 1 ms
+    CHECK(relativeDueTime100ns(0)    == 0LL);          // no wait
+    CHECK(relativeDueTime100ns(1000) == -10000000LL);  // 1 s
+    CHECK(relativeDueTime100ns(1)    < 0);             // must be negative (relative)
+}
+
 int main(void) {
     printf("Running timing unit tests...\n");
 
     test_lagValueToQpcTicks_wholeMs();
     test_lagValueToQpcTicks_noOverflow();
     test_lagIsDue_boundary();
+    test_relativeDueTime100ns();
 
     printf("\n%d checks, %d failure(s)\n", checks, failures);
     if (failures) {

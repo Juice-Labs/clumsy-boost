@@ -20,3 +20,10 @@ static inline long long lagValueToQpcTicks(long value, long long qpcFreq, long u
 static inline int lagIsDue(long long nowTicks, long long packetTicks, long long lagTicks) {
     return nowTicks > packetTicks + lagTicks;
 }
+
+// Convert a relative wait in whole milliseconds into the units SetWaitableTimer
+// expects: 100-nanosecond intervals, negative to mean relative (not absolute) time.
+// 1 ms = 10,000 * 100ns.
+static inline long long relativeDueTime100ns(unsigned long ms) {
+    return -((long long)ms * 10000);
+}
