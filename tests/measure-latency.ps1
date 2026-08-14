@@ -48,23 +48,31 @@ if (-not $Filter) {
     $Filter = "ip.DstAddr == $TargetHost or ip.SrcAddr == $TargetHost"
 }
 
-# Warn if not elevated (Clumsy will fail to load the driver otherwise).
+# Require elevation up front: without it Clumsy silently loads no driver and
+# injects nothing, producing a meaningless "0ms added" result.
 $isAdmin = ([Security.Principal.WindowsPrincipal] `
     [Security.Principal.WindowsIdentity]::GetCurrent()
 ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    Write-Warning "Not running elevated. Clumsy needs Administrator to load WinDivert; this will likely fail."
+    Write-Error "This test must run in an ELEVATED PowerShell (WinDivert needs Administrator). Open PowerShell via 'Run as administrator' and re-run."
+    exit 2
 }
 
 function Get-PingAvgMs([string]$targetHost, [int]$count) {
-    # -Quiet returns bool; we want timing, so parse Test-Connection results.
-    $replies = Test-Connection -ComputerName $targetHost -Count $count -ErrorAction Stop
-    # ResponseTime is in ms (integer). Average across replies.
-    $times = $replies | ForEach-Object {
-        if ($null -ne $_.ResponseTime) { $_.ResponseTime }
-        elseif ($null -ne $_.Latency)  { $_.Latency }   # PS 7 naming
+    # Shell out to ping.exe and average the per-reply "time=Xms" values. This
+    # matches the manual measurement methodology and avoids the ~1ms WMI overhead
+    # that Test-Connection adds on Windows PowerShell 5.1.
+    # NOTE: parses English-locale ping output ("time=Xms" / "time<1ms").
+    $output = & ping.exe -n $count $targetHost 2>&1
+    $times = @()
+    foreach ($line in $output) {
+        if ($line -match 'time<1ms') {
+            $times += 0            # sub-millisecond reply -> count as 0
+        } elseif ($line -match 'time=(\d+)ms') {
+            $times += [int]$Matches[1]
+        }
     }
-    if (-not $times) { throw "No ping replies from $targetHost" }
+    if ($times.Count -eq 0) { throw "No ping replies from $targetHost (host unreachable?)" }
     return ($times | Measure-Object -Average).Average
 }
 
@@ -80,16 +88,12 @@ Write-Host ("  baseline avg = {0:N2} ms`n" -f $baseline)
 
 # --- 2. Launch Clumsy headless with lag on both directions ---
 $runSeconds = [math]::Max(15, [int]($Iterations * 1.0) + 8)
-$clumsyArgs = @(
-    "--filter", $Filter,
-    "--lag", "on",
-    "--lag-inbound", "on",
-    "--lag-outbound", "on",
-    "--lag-time", "$LagMs",
-    "--timeout", "$runSeconds"
-)
-Write-Host "Launching Clumsy for ~$runSeconds s: $ClumsyExe $($clumsyArgs -join ' ')"
-$proc = Start-Process -FilePath $ClumsyExe -ArgumentList $clumsyArgs -PassThru
+# The filter contains spaces, so it MUST be passed as a single double-quoted
+# argument -- otherwise Clumsy's arg parser sees "--filter ip.DstAddr" and then
+# chokes on the next token. Build the command line explicitly with the filter quoted.
+$argString = "--filter `"$Filter`" --lag on --lag-inbound on --lag-outbound on --lag-time $LagMs --timeout $runSeconds"
+Write-Host "Launching Clumsy for ~$runSeconds s:`n  $ClumsyExe $argString"
+$proc = Start-Process -FilePath $ClumsyExe -ArgumentList $argString -PassThru
 Start-Sleep -Seconds 3   # let the driver load and filtering start
 
 try {
