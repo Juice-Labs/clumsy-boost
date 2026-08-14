@@ -15,8 +15,10 @@ static Ihandle *inboundCheckbox, *outboundCheckbox, *timeInput;
 
 static volatile short lagEnabled = 0,
     lagInbound = 1,
-    lagOutbound = 1,
-    lagTime = LAG_DEFAULT; // default for 50ms
+    lagOutbound = 1;
+// lagTime is stored in hundredths of a millisecond (FIXED_EPSILON = 0.01) so the
+// UI can accept fractional ms like 2.5; e.g. 50ms is stored as 5000
+static volatile LONG lagTime = LAG_DEFAULT * 100;
 
 static PacketNode lagHeadNode = {0}, lagTailNode = {0};
 static PacketNode *bufHead = &lagHeadNode, *bufTail = &lagTailNode;
@@ -43,10 +45,11 @@ static Ihandle *lagSetupUI() {
 
     IupSetAttribute(timeInput, "VISIBLECOLUMNS", "4");
     IupSetAttribute(timeInput, "VALUE", STR(LAG_DEFAULT));
-    IupSetCallback(timeInput, "VALUECHANGED_CB", uiSyncInteger);
+    // uiSyncFixedInt accepts fractional ms (e.g. 2.5) and stores hundredths of a ms
+    IupSetCallback(timeInput, "VALUECHANGED_CB", uiSyncFixedInt);
     IupSetAttribute(timeInput, SYNCED_VALUE, (char*)&lagTime);
-    IupSetAttribute(timeInput, INTEGER_MAX, LAG_MAX);
-    IupSetAttribute(timeInput, INTEGER_MIN, LAG_MIN);
+    IupSetAttribute(timeInput, FIXED_MAX, LAG_MAX);
+    IupSetAttribute(timeInput, FIXED_MIN, LAG_MIN);
     IupSetCallback(inboundCheckbox, "ACTION", (Icallback)uiSyncToggle);
     IupSetAttribute(inboundCheckbox, SYNCED_VALUE, (char*)&lagInbound);
     IupSetCallback(outboundCheckbox, "ACTION", (Icallback)uiSyncToggle);
@@ -94,8 +97,8 @@ static short lagProcess(PacketNode *head, PacketNode *tail) {
     LONGLONG lagTimeTicks;
     PacketNode *pac = tail->prev;
     QueryPerformanceCounter(&currentTime);
-    // lagTime is in whole milliseconds, so unitsPerSecond = 1000
-    lagTimeTicks = lagValueToQpcTicks(lagTime, lagQpcFrequency.QuadPart, 1000);
+    // lagTime is in hundredths of a ms, so unitsPerSecond = 100 * 1000
+    lagTimeTicks = lagValueToQpcTicks(lagTime, lagQpcFrequency.QuadPart, 100000);
     // pick up all packets and fill in the current time
     while (bufSize < KEEP_AT_MOST && pac != head) {
         if (checkDirection(pac->addr.Outbound, lagInbound, lagOutbound)) {

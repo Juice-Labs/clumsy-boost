@@ -27,3 +27,16 @@ static inline int lagIsDue(long long nowTicks, long long packetTicks, long long 
 static inline long long relativeDueTime100ns(unsigned long ms) {
     return -((long long)ms * 10000);
 }
+
+// Clamp a float to [lo, hi].
+static inline float clampFloat(float value, float lo, float hi) {
+    if (value > hi) return hi;
+    if (value < lo) return lo;
+    return value;
+}
+
+// Convert a value into fixed-point units of `epsilon`. e.g. epsilon 0.01 stores
+// hundredths, so 2.5 -> 250. Truncates toward zero, matching the UI's cast.
+static inline long fixedFromValue(float value, double epsilon) {
+    return (long)(value / epsilon);
+}

@@ -55,6 +55,31 @@ static void test_relativeDueTime100ns(void) {
     CHECK(relativeDueTime100ns(1)    < 0);             // must be negative (relative)
 }
 
+static void test_clampFloat(void) {
+    CHECK(clampFloat(2.5f, 0.0f, 3000.0f) == 2.5f);   // in range -> unchanged
+    CHECK(clampFloat(-1.0f, 0.0f, 3000.0f) == 0.0f);  // below min -> min
+    CHECK(clampFloat(5000.0f, 0.0f, 3000.0f) == 3000.0f); // above max -> max
+    CHECK(clampFloat(0.0f, 0.0f, 3000.0f) == 0.0f);   // at min -> min
+}
+
+static void test_fixedFromValue_decimal(void) {
+    // 0.01 epsilon stores hundredths of a ms
+    CHECK(fixedFromValue(2.5f, 0.01) == 250);    // the case that motivated decimal input
+    CHECK(fixedFromValue(50.0f, 0.01) == 5000);  // default 50ms
+    CHECK(fixedFromValue(0.0f, 0.01) == 0);
+    // max lag (3000ms) must fit in a long without overflow (300000 << 2^31)
+    CHECK(fixedFromValue(3000.0f, 0.01) == 300000);
+}
+
+static void test_decimal_endToEnd_ticks(void) {
+    // Full path: 2.5ms typed -> stored hundredths -> QPC ticks, using the
+    // hundredths divisor (unitsPerSecond = 100000). 2.5ms at 10MHz = 25,000 ticks.
+    long stored = fixedFromValue(2.5f, 0.01);              // 250
+    CHECK(lagValueToQpcTicks(stored, QPC_FREQ_10MHZ, 100000) == 25000LL);
+    // and the old truncation bug (2.5 -> 2) would have given 20,000 ticks:
+    CHECK(lagValueToQpcTicks(stored, QPC_FREQ_10MHZ, 100000) != 20000LL);
+}
+
 int main(void) {
     printf("Running timing unit tests...\n");
 
@@ -62,6 +87,9 @@ int main(void) {
     test_lagValueToQpcTicks_noOverflow();
     test_lagIsDue_boundary();
     test_relativeDueTime100ns();
+    test_clampFloat();
+    test_fixedFromValue_decimal();
+    test_decimal_endToEnd_ticks();
 
     printf("\n%d checks, %d failure(s)\n", checks, failures);
     if (failures) {
