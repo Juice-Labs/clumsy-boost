@@ -4,7 +4,7 @@
 #include "iup.h"
 #include "windivert.h"
 
-#define CLUMSY_VERSION "1.0.0"
+#define CLUMSY_VERSION "1.1.0"
 #define MSG_BUFSIZE 512
 #define FILTER_BUFSIZE 1024
 #define NAME_SIZE 16
@@ -97,7 +97,7 @@ typedef struct _NODE {
     char *packet;
     UINT packetLen;
     WINDIVERT_ADDRESS addr;
-    DWORD timestamp; // ! timestamp isn't filled when creating node since it's only needed for lag
+    LONGLONG timestamp; // QueryPerformanceCounter ticks; ! isn't filled when creating node since it's only needed for lag
     struct _NODE *prev, *next;
 } PacketNode;
 
@@ -161,6 +161,10 @@ void showStatus(const char* line);
 // WinDivert
 int divertStart(const char * filter, char buf[]);
 void divertStop();
+void divertSetLogFile(const char *path); // enable run logging to path (NULL/"" disables)
+
+// lag module diagnostics accessor
+int lagQueueDepth(void);
 
 // utils
 // STR to convert int macro to string

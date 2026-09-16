@@ -2,6 +2,7 @@
 #include <Windows.h>
 #include "iup.h"
 #include "common.h"
+#include "timing.h"
 
 short calcChance(short chance) {
     // notice that here we made a copy of chance, so even though it's volatile it is still ok
@@ -109,14 +110,9 @@ int uiSyncFixedInt(Ihandle *ih) {
     const float maxFixedValue = IupGetFloat(ih, FIXED_MAX);
     const float minFixedValue = IupGetFloat(ih, FIXED_MIN);
     float value = IupGetFloat(ih, "VALUE");
-    float newValue = value;
+    float newValue = clampFloat(value, minFixedValue, maxFixedValue);
     long fixValue;
     char valueBuf[8];
-    if (newValue > maxFixedValue) {
-        newValue = maxFixedValue;
-    } else if (newValue < minFixedValue) {
-        newValue = minFixedValue;
-    }
 
     if (newValue != value && value != 0) {
         sprintf(valueBuf, "%.2f", newValue);
@@ -125,7 +121,7 @@ int uiSyncFixedInt(Ihandle *ih) {
         IupStoreAttribute(ih, "CARET", "10");
     }
     // sync back
-    fixValue = (long)(newValue / FIXED_EPSILON);
+    fixValue = fixedFromValue(newValue, FIXED_EPSILON);
     InterlockedExchange(fixedPointer, fixValue);
     return IUP_DEFAULT;
 }

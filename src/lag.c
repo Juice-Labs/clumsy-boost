@@ -1,6 +1,7 @@
 // lagging packets
 #include "iup.h"
 #include "common.h"
+#include "timing.h"
 #define NAME "lag"
 #define LAG_MIN "0"
 #define LAG_MAX "3000"
@@ -14,17 +15,29 @@ static Ihandle *inboundCheckbox, *outboundCheckbox, *timeInput;
 
 static volatile short lagEnabled = 0,
     lagInbound = 1,
-    lagOutbound = 1,
-    lagTime = LAG_DEFAULT; // default for 50ms
+    lagOutbound = 1;
+// lagTime is stored in hundredths of a millisecond (FIXED_EPSILON = 0.01) so the
+// UI can accept fractional ms like 2.5; e.g. 50ms is stored as 5000
+static volatile LONG lagTime = LAG_DEFAULT * 100;
 
 static PacketNode lagHeadNode = {0}, lagTailNode = {0};
 static PacketNode *bufHead = &lagHeadNode, *bufTail = &lagTailNode;
 static int bufSize = 0;
 
+// QueryPerformanceCounter ticks/sec; queried once at startup. timeGetTime()'s
+// whole-millisecond resolution isn't precise enough for the release-timing check
+static LARGE_INTEGER lagQpcFrequency;
+
 static INLINE_FUNCTION short isBufEmpty() {
     short ret = bufHead->next == bufTail;
     if (ret) assert(bufSize == 0);
     return ret;
+}
+
+// read-only accessor for diagnostics/logging: current number of packets held
+// in the lag buffer. Plain int read; a torn value only affects a log snapshot.
+int lagQueueDepth(void) {
+    return bufSize;
 }
 
 static Ihandle *lagSetupUI() {
@@ -38,10 +51,11 @@ static Ihandle *lagSetupUI() {
 
     IupSetAttribute(timeInput, "VISIBLECOLUMNS", "4");
     IupSetAttribute(timeInput, "VALUE", STR(LAG_DEFAULT));
-    IupSetCallback(timeInput, "VALUECHANGED_CB", uiSyncInteger);
+    // uiSyncFixedInt accepts fractional ms (e.g. 2.5) and stores hundredths of a ms
+    IupSetCallback(timeInput, "VALUECHANGED_CB", uiSyncFixedInt);
     IupSetAttribute(timeInput, SYNCED_VALUE, (char*)&lagTime);
-    IupSetAttribute(timeInput, INTEGER_MAX, LAG_MAX);
-    IupSetAttribute(timeInput, INTEGER_MIN, LAG_MIN);
+    IupSetAttribute(timeInput, FIXED_MAX, LAG_MAX);
+    IupSetAttribute(timeInput, FIXED_MIN, LAG_MIN);
     IupSetCallback(inboundCheckbox, "ACTION", (Icallback)uiSyncToggle);
     IupSetAttribute(inboundCheckbox, SYNCED_VALUE, (char*)&lagInbound);
     IupSetCallback(outboundCheckbox, "ACTION", (Icallback)uiSyncToggle);
@@ -68,6 +82,7 @@ static void lagStartUp() {
     } else {
         assert(isBufEmpty());
     }
+    QueryPerformanceFrequency(&lagQpcFrequency);
     startTimePeriod();
 }
 
@@ -84,12 +99,18 @@ static void lagCloseDown(PacketNode *head, PacketNode *tail) {
 }
 
 static short lagProcess(PacketNode *head, PacketNode *tail) {
-    DWORD currentTime = timeGetTime();
+    LARGE_INTEGER currentTime;
+    LONGLONG lagTimeTicks;
     PacketNode *pac = tail->prev;
+    QueryPerformanceCounter(&currentTime);
+    // lagTime is in hundredths of a ms, so unitsPerSecond = 100 * 1000
+    lagTimeTicks = lagValueToQpcTicks(lagTime, lagQpcFrequency.QuadPart, 100000);
     // pick up all packets and fill in the current time
     while (bufSize < KEEP_AT_MOST && pac != head) {
         if (checkDirection(pac->addr.Outbound, lagInbound, lagOutbound)) {
-            insertAfter(popNode(pac), bufHead)->timestamp = timeGetTime();
+            LARGE_INTEGER now;
+            QueryPerformanceCounter(&now);
+            insertAfter(popNode(pac), bufHead)->timestamp = now.QuadPart;
             ++bufSize;
             pac = tail->prev;
         } else {
@@ -100,7 +121,7 @@ static short lagProcess(PacketNode *head, PacketNode *tail) {
     // try sending overdue packets from buffer tail
     while (!isBufEmpty()) {
         pac = bufTail->prev;
-        if (currentTime > pac->timestamp + lagTime) {
+        if (lagIsDue(currentTime.QuadPart, pac->timestamp, lagTimeTicks)) {
             insertAfter(popNode(bufTail->prev), head); // sending queue is already empty by now
             --bufSize;
             LOG("Send lagged packets.");

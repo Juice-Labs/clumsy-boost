@@ -5,3 +5,6 @@ etc/clumsy.aps
 obj_vs
 obj_gmake
 premake*.exe
+
+# unit test build artifacts
+*.obj
